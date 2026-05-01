@@ -1,6 +1,7 @@
 /*
  * XML-RPC && WP-Login Brute Force + Auto Upload
  * Original Python version by t.me/@GrazzMean | https://github.com/fooster1337
+ * Rewrite in Rust by t.me/@fxshellx12 | https://github.com/ifqygazhar
  * Rust rewrite — edit as much as you like but don't forget to give credit.
  */
 

