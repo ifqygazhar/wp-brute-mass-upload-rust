@@ -1,0 +1,15 @@
+.cf7cstmzr-submenu-item {
+
+}
+.cf7cstmzr-submenu-item:before {
+    content: '\21B3';
+    padding: 0 5px;
+}
+
+.cf7cstmzr-tutorial-section {
+    max-width: 800px;
+}
+
+.cf7cstmzr-tutorial-section .wp-video {
+    margin: auto;
+}

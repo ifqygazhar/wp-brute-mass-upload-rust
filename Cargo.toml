@@ -1,0 +1,17 @@
+[package]
+name = "mass-xmlrpc-wordpress-brute"
+version = "0.1.0"
+edition = "2021"
+description = "XML-RPC & WP-Login WordPress Brute Force Tool (Rust rewrite)"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "cookies"] }
+colored = "2"
+rand = "0.8"
+regex = "1"
+url = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
