@@ -35,20 +35,43 @@ pub fn random_user_agent(agents: &[String]) -> String {
         })
 }
 
-// ─── File Saver (thread-safe) ────────────────────────────────────────────────
+// ─── File Saver (thread-safe, retry on fd exhaustion) ────────────────────────
 
 pub async fn save_content(path: &str, content: &str) {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to open {}: {}", path, e);
-            std::process::exit(1);
-        });
-    let _ = file.write_all(format!("{}\n", content).as_bytes()).await;
+    let max_retries = 3;
+    for attempt in 0..max_retries {
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+        {
+            Ok(mut file) => {
+                let _ = file.write_all(format!("{}\n", content).as_bytes()).await;
+                return;
+            }
+            Err(e) => {
+                if attempt < max_retries - 1 {
+                    // Wait a bit for file descriptors to be freed
+                    eprintln!(
+                        "Warning: Failed to open {} (attempt {}/{}): {}. Retrying...",
+                        path,
+                        attempt + 1,
+                        max_retries,
+                        e
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                } else {
+                    eprintln!(
+                        "ERROR: Could not write to {} after {} attempts: {}. Skipping.",
+                        path, max_retries, e
+                    );
+                }
+            }
+        }
+    }
 }
+
 
 // ─── Build reqwest Client ────────────────────────────────────────────────────
 
