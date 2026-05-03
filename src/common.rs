@@ -85,6 +85,7 @@ pub fn build_client() -> Client {
             .timeout(Duration::from_secs(10))
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::limited(10))
+            .pool_max_idle_per_host(0) // Don't keep idle connections (different hosts each time)
     };
 
     if Path::new(cert_path).exists() && Path::new(key_path).exists() {
@@ -122,6 +123,23 @@ pub fn build_client() -> Client {
         eprintln!("{}", format!("Failed to build HTTP client: {:?}", e).red());
         std::process::exit(1);
     })
+}
+
+// ─── Client Pool ─────────────────────────────────────────────────────────────
+
+/// Build a pool of N independent clients, each with its own cookie jar & connection pool.
+/// This avoids cookie cross-contamination and Mutex contention on shared cookie store.
+pub fn build_client_pool(size: usize) -> Vec<Client> {
+    eprintln!(
+        "{}",
+        format!("[*] Building pool of {} HTTP clients...", size).cyan()
+    );
+    (0..size).map(|_| build_client()).collect()
+}
+
+/// Pick a client from the pool using a simple index (round-robin by task ID)
+pub fn pick_client(pool: &[Client], index: usize) -> Client {
+    pool[index % pool.len()].clone()
 }
 
 // ─── TCP Port Check ──────────────────────────────────────────────────────────

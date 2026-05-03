@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 use tokio::time::Duration;
 use url::Url;
 
-use crate::common::{build_client, parse_url, random_user_agent, save_content};
+use crate::common::{build_client_pool, pick_client, parse_url, random_user_agent, save_content};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -516,17 +516,17 @@ async fn process_batch(
     password_template: &str,
     processed: &AtomicU64,
     total_lines: u64,
-    shared_client: &reqwest::Client,
+    client_pool: &[reqwest::Client],
 ) {
     let semaphore = Arc::new(Semaphore::new(thread_count));
     let mut handles = vec![];
 
-    for raw_url in batch {
+    for (i, raw_url) in batch.into_iter().enumerate() {
         let sem = semaphore.clone();
         let ua_pool = user_agents.clone();
         let pw_template = password_template.to_string();
         let thread_count = thread_count;
-        let client = shared_client.clone();
+        let client = pick_client(client_pool, i);
 
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
@@ -621,8 +621,9 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
 
     let password_template = load_passwords(pw_path);
 
-    // Build ONE shared client for all tasks — saves thousands of file descriptors
-    let shared_client = build_client();
+    // Build a pool of clients — each has its own cookie jar, no contention
+    let pool_size = thread_count.min(200); // cap at 200 clients
+    let client_pool = build_client_pool(pool_size);
 
     // Count total lines for progress tracking (fast scan, no data stored)
     eprint!("{}", "[*] Counting lines... ".cyan());
@@ -690,7 +691,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
                 &password_template,
                 &processed,
                 total_lines,
-                &shared_client,
+                &client_pool,
             )
             .await;
 
@@ -719,7 +720,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
             &password_template,
             &processed,
             total_lines,
-            &shared_client,
+            &client_pool,
         )
         .await;
     }
