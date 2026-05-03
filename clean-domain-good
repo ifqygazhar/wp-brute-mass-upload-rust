@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Meminta input nama file dari user
+read -p "Masukkan nama file (contoh: list.txt): " filename
+
+# Mengecek apakah file tersebut benar-benar ada di direktori saat ini
+if [ ! -f "$filename" ]; then
+    echo "Waduh, file '$filename' nggak ketemu nih di folder ini."
+    exit 1
+fi
+
+# Membuat nama file output dengan menambahkan -clean.txt
+# (Ini otomatis menghapus ekstensi lama jika ada, misal list.txt jadi list-clean.txt)
+outfile="${filename%.*}-clean.txt"
+
+# Proses deduplikasi menggunakan awk
+# -F'/'     : Mengatur delimiter pemisah kolom menjadi '/'
+# !seen[$3]++ : Menyimpan kolom ke-3 (domain) ke dalam array 'seen'. 
+#               Jika nilainya 0 (belum pernah dilihat), baris akan di-print (seluruh line utuh).
+#               Jika sudah ada, baris akan dilewati.
+awk -F'/' '!seen[$3]++' "$filename" > "$outfile"
+
+echo "Mantap! 🎉 List berhasil dibersihkan dari domain yang duplikat."
+echo "Hasilnya disimpen di: $outfile"
