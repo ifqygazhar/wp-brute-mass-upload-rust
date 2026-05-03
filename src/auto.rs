@@ -154,9 +154,10 @@ impl AutoLogin {
         password: String,
         config: &Config,
         user_agents: Arc<Vec<String>>,
+        client: reqwest::Client,
     ) -> Self {
         Self {
-            client: build_client(),
+            client,
             url,
             username,
             password,
@@ -790,6 +791,7 @@ async fn process_auto_batch(
     config: &Arc<Config>,
     processed: &std::sync::atomic::AtomicU64,
     total_lines: u64,
+    shared_client: &reqwest::Client,
 ) {
     let semaphore = Arc::new(Semaphore::new(thread_count));
     let mut handles = vec![];
@@ -798,6 +800,7 @@ async fn process_auto_batch(
         let sem = semaphore.clone();
         let ua_pool = user_agents.clone();
         let config = config.clone();
+        let client = shared_client.clone();
 
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
@@ -805,7 +808,7 @@ async fn process_auto_batch(
             match parse_domain(&raw_url) {
                 Some((url, user, pwd)) => {
                     let base_url = url.replace("/wp-login.php", "");
-                    let login = AutoLogin::new(base_url, user, pwd, &config, ua_pool);
+                    let login = AutoLogin::new(base_url, user, pwd, &config, ua_pool, client);
                     login.start().await;
                 }
                 None => {
@@ -878,6 +881,9 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
     stdin.lock().read_line(&mut batch_input).unwrap();
     let batch_size: usize = batch_input.trim().parse().unwrap_or(BATCH_SIZE);
 
+    // Build ONE shared client for all tasks — saves thousands of file descriptors
+    let shared_client = build_client();
+
     // Count total lines for progress tracking (fast scan, no data stored)
     eprint!("{}", "[*] Counting lines... ".cyan());
     let total_lines = count_lines(&list_path);
@@ -944,6 +950,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
                 &config,
                 &processed,
                 total_lines,
+                &shared_client,
             )
             .await;
 
@@ -971,6 +978,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
             &config,
             &processed,
             total_lines,
+            &shared_client,
         )
         .await;
     }

@@ -38,13 +38,19 @@ struct Brute {
 }
 
 impl Brute {
-    fn new(url: String, thread_count: usize, user_agents: Arc<Vec<String>>, password_template: String) -> Self {
+    fn new(
+        url: String,
+        thread_count: usize,
+        user_agents: Arc<Vec<String>>,
+        password_template: String,
+        client: reqwest::Client,
+    ) -> Self {
         Self {
             url,
             thread_count,
             user_agents,
             password_template,
-            client: build_client(),
+            client,
             xmlrpc_lean: false,
             wplogin_lean: false,
         }
@@ -449,9 +455,10 @@ impl Brute {
                 let passwords = passwords.clone();
                 let pw_template = self.password_template.clone();
                 let tc = self.thread_count;
+                let client = self.client.clone();
 
                 handles.push(tokio::spawn(async move {
-                    let brute = Brute::new(url, tc, ua_pool, pw_template);
+                    let brute = Brute::new(url, tc, ua_pool, pw_template, client);
                     brute.brute_xmlrpc(&user, &passwords).await
                 }));
             }
@@ -463,9 +470,10 @@ impl Brute {
                 let passwords = passwords.clone();
                 let pw_template = self.password_template.clone();
                 let tc = self.thread_count;
+                let client = self.client.clone();
 
                 handles.push(tokio::spawn(async move {
-                    let brute = Brute::new(url, tc, ua_pool, pw_template);
+                    let brute = Brute::new(url, tc, ua_pool, pw_template, client);
                     brute.brute_wp_login(&user, &passwords).await
                 }));
             }
@@ -496,6 +504,7 @@ async fn process_batch(
     password_template: &str,
     processed: &AtomicU64,
     total_lines: u64,
+    shared_client: &reqwest::Client,
 ) {
     let semaphore = Arc::new(Semaphore::new(thread_count));
     let mut handles = vec![];
@@ -505,13 +514,14 @@ async fn process_batch(
         let ua_pool = user_agents.clone();
         let pw_template = password_template.to_string();
         let thread_count = thread_count;
+        let client = shared_client.clone();
 
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
 
             match parse_url(&raw_url).await {
                 Some(url) => {
-                    let mut brute = Brute::new(url, thread_count, ua_pool, pw_template);
+                    let mut brute = Brute::new(url, thread_count, ua_pool, pw_template, client);
                     brute.start().await;
                 }
                 None => {
@@ -599,6 +609,9 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
 
     let password_template = load_passwords(pw_path);
 
+    // Build ONE shared client for all tasks — saves thousands of file descriptors
+    let shared_client = build_client();
+
     // Count total lines for progress tracking (fast scan, no data stored)
     eprint!("{}", "[*] Counting lines... ".cyan());
     let total_lines = count_lines(&list_path);
@@ -665,6 +678,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
                 &password_template,
                 &processed,
                 total_lines,
+                &shared_client,
             )
             .await;
 
@@ -693,6 +707,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
             &password_template,
             &processed,
             total_lines,
+            &shared_client,
         )
         .await;
     }
