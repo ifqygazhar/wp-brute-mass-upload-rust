@@ -256,11 +256,18 @@ impl AutoLogin {
                 Ok(resp) => {
                     let final_url = resp.url().to_string();
                     let text = resp.text().await.unwrap_or_default();
-                    if text.contains("dashboard")
-                        || text.contains("/wp-admin/admin-ajax.php")
-                        || text.contains("adminpage")
-                        || final_url.contains("/wp-admin/")
-                    {
+                    // Must NOT contain login error indicators
+                    let has_login_error = text.contains("login_error")
+                        || text.contains("user_login")
+                        || text.contains("Passwort vergessen")
+                        || text.contains("Lost your password")
+                        || text.contains("incorrect")
+                        || text.contains("not correct");
+                    // Must show real dashboard signs OR redirect to wp-admin
+                    let has_dashboard = final_url.contains("/wp-admin/")
+                        || (text.contains("/wp-admin/admin-ajax.php")
+                            && text.contains("adminmenu"));
+                    if !has_login_error && has_dashboard {
                         self.vuln("Valid_Login");
                         return true;
                     }
