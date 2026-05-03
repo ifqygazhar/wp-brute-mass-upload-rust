@@ -10,7 +10,6 @@ use regex::Regex;
 use reqwest::header::USER_AGENT;
 use reqwest::multipart;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -766,6 +765,80 @@ impl AutoLogin {
     }
 }
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+/// How many URLs to read into memory at once before processing
+const BATCH_SIZE: usize = 10_000;
+
+// ─── Count lines without loading file into memory ────────────────────────────
+
+fn count_lines(path: &str) -> u64 {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    let reader = io::BufReader::with_capacity(1024 * 1024, file);
+    reader.lines().count() as u64
+}
+
+// ─── Batch Processing Helper ─────────────────────────────────────────────────
+
+async fn process_auto_batch(
+    batch: Vec<String>,
+    thread_count: usize,
+    user_agents: &Arc<Vec<String>>,
+    config: &Arc<Config>,
+    processed: &std::sync::atomic::AtomicU64,
+    total_lines: u64,
+) {
+    let semaphore = Arc::new(Semaphore::new(thread_count));
+    let mut handles = vec![];
+
+    for raw_url in batch {
+        let sem = semaphore.clone();
+        let ua_pool = user_agents.clone();
+        let config = config.clone();
+
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+
+            match parse_domain(&raw_url) {
+                Some((url, user, pwd)) => {
+                    let base_url = url.replace("/wp-login.php", "");
+                    let login = AutoLogin::new(base_url, user, pwd, &config, ua_pool);
+                    login.start().await;
+                }
+                None => {
+                    println!(
+                        "[{}] {} --> [{}]",
+                        "#".yellow(),
+                        raw_url,
+                        "Failed_Parsing".red()
+                    );
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.await;
+    }
+
+    let done = processed.load(std::sync::atomic::Ordering::Relaxed);
+    if total_lines > 0 {
+        eprintln!(
+            "{}",
+            format!(
+                "[*] Progress: {}/{} lines processed ({:.1}%)",
+                done,
+                total_lines,
+                (done as f64 / total_lines as f64) * 100.0
+            )
+            .cyan()
+        );
+    }
+}
+
 // ─── Public Entry Point ──────────────────────────────────────────────────────
 
 pub async fn run(user_agents: Arc<Vec<String>>) {
@@ -799,60 +872,116 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
     stdin.lock().read_line(&mut thread_input).unwrap();
     let thread_count: usize = thread_input.trim().parse().unwrap_or(10);
 
-    // Load URL list (deduplicated)
-    let urls: Vec<String> = match fs::read_to_string(&list_path) {
-        Ok(content) => {
-            let mut seen = HashSet::new();
-            content
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter(|l| seen.insert(l.to_string()))
-                .map(|l| l.to_string())
-                .collect()
-        }
-        Err(_) => {
-            eprintln!("{}", "ERROR: File not found.".red());
+    print!("[Batch size] [default: {}] -> ", BATCH_SIZE);
+    io::stdout().flush().unwrap();
+    let mut batch_input = String::new();
+    stdin.lock().read_line(&mut batch_input).unwrap();
+    let batch_size: usize = batch_input.trim().parse().unwrap_or(BATCH_SIZE);
+
+    // Count total lines for progress tracking (fast scan, no data stored)
+    eprint!("{}", "[*] Counting lines... ".cyan());
+    let total_lines = count_lines(&list_path);
+    eprintln!(
+        "{}",
+        format!("{} entries found", total_lines).green()
+    );
+
+    // Open file for streaming — NOT loading into memory
+    let file = match std::fs::File::open(&list_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("{}", format!("Failed to read list file: {}", e).red());
             return;
         }
     };
 
-    println!(
-        "\n{} Loaded {} URLs with {} threads\n",
-        "[*]".green(),
-        urls.len(),
-        thread_count
+    // Use a large buffer for efficient I/O (8MB)
+    let reader = io::BufReader::with_capacity(8 * 1024 * 1024, file);
+
+    eprintln!(
+        "{}",
+        format!(
+            "[*] Streaming mode: batch_size={}, threads={}, memory-safe for any file size",
+            batch_size, thread_count
+        )
+        .green()
     );
 
-    let semaphore = Arc::new(Semaphore::new(thread_count));
-    let mut handles = vec![];
+    let processed = std::sync::atomic::AtomicU64::new(0);
+    let mut batch: Vec<String> = Vec::with_capacity(batch_size);
+    let mut batch_num: u64 = 0;
 
-    for raw_url in urls {
-        let sem = semaphore.clone();
-        let ua_pool = user_agents.clone();
-        let config = config.clone();
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
 
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+        let trimmed = line.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
 
-            match parse_domain(&raw_url) {
-                Some((url, user, pwd)) => {
-                    let base_url = url.replace("/wp-login.php", "");
-                    let login = AutoLogin::new(base_url, user, pwd, &config, ua_pool);
-                    login.start().await;
-                }
-                None => {
-                    println!(
-                        "[{}] {} --> [{}]",
-                        "#".yellow(),
-                        raw_url,
-                        "Failed_Parsing".red()
-                    );
-                }
-            }
-        }));
+        batch.push(trimmed);
+        processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if batch.len() >= batch_size {
+            batch_num += 1;
+            eprintln!(
+                "{}",
+                format!(
+                    "[*] Processing batch #{} ({} URLs)...",
+                    batch_num,
+                    batch.len()
+                )
+                .cyan()
+            );
+
+            process_auto_batch(
+                std::mem::take(&mut batch),
+                thread_count,
+                &user_agents,
+                &config,
+                &processed,
+                total_lines,
+            )
+            .await;
+
+            batch = Vec::with_capacity(batch_size);
+        }
     }
 
-    for handle in handles {
-        let _ = handle.await;
+    // Process remaining URLs in the last (partial) batch
+    if !batch.is_empty() {
+        batch_num += 1;
+        eprintln!(
+            "{}",
+            format!(
+                "[*] Processing final batch #{} ({} URLs)...",
+                batch_num,
+                batch.len()
+            )
+            .cyan()
+        );
+
+        process_auto_batch(
+            batch,
+            thread_count,
+            &user_agents,
+            &config,
+            &processed,
+            total_lines,
+        )
+        .await;
     }
+
+    eprintln!(
+        "{}",
+        format!(
+            "[✓] Done! Processed {} entries in {} batches.",
+            processed.load(std::sync::atomic::Ordering::Relaxed),
+            batch_num
+        )
+        .green()
+    );
 }

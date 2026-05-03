@@ -2,14 +2,19 @@ use colored::*;
 use regex::Regex;
 use reqwest::header::{CONTENT_TYPE, USER_AGENT};
 use std::fs;
-use std::io::{self, BufRead, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{self, BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
 use url::Url;
 
 use crate::common::{build_client, parse_url, random_user_agent, save_content};
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+/// How many URLs to read into memory at once before processing
+const BATCH_SIZE: usize = 10_000;
 
 // ─── Password Loader ─────────────────────────────────────────────────────────
 
@@ -481,6 +486,76 @@ impl Brute {
     }
 }
 
+// ─── Batch Processing Helper ─────────────────────────────────────────────────
+
+/// Process a single batch of URLs concurrently with bounded parallelism
+async fn process_batch(
+    batch: Vec<String>,
+    thread_count: usize,
+    user_agents: &Arc<Vec<String>>,
+    password_template: &str,
+    processed: &AtomicU64,
+    total_lines: u64,
+) {
+    let semaphore = Arc::new(Semaphore::new(thread_count));
+    let mut handles = vec![];
+
+    for raw_url in batch {
+        let sem = semaphore.clone();
+        let ua_pool = user_agents.clone();
+        let pw_template = password_template.to_string();
+        let thread_count = thread_count;
+
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+
+            match parse_url(&raw_url).await {
+                Some(url) => {
+                    let mut brute = Brute::new(url, thread_count, ua_pool, pw_template);
+                    brute.start().await;
+                }
+                None => {
+                    println!(
+                        "[{}] {} => {}",
+                        "#".red(),
+                        raw_url,
+                        "Die Website".red()
+                    );
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.await;
+    }
+
+    let done = processed.load(Ordering::Relaxed);
+    if total_lines > 0 {
+        eprintln!(
+            "{}",
+            format!(
+                "[*] Progress: {}/{} lines processed ({:.1}%)",
+                done,
+                total_lines,
+                (done as f64 / total_lines as f64) * 100.0
+            )
+            .cyan()
+        );
+    }
+}
+
+// ─── Count lines without loading file into memory ────────────────────────────
+
+fn count_lines(path: &str) -> u64 {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    let reader = BufReader::with_capacity(1024 * 1024, file); // 1MB buffer
+    reader.lines().count() as u64
+}
+
 // ─── Public Entry Point ──────────────────────────────────────────────────────
 
 pub async fn run(user_agents: Arc<Vec<String>>) {
@@ -516,61 +591,119 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
     stdin.lock().read_line(&mut thread_input).unwrap();
     let thread_count: usize = thread_input.trim().parse().unwrap_or(10);
 
+    print!("- Batch size [default: {}] : ", BATCH_SIZE);
+    io::stdout().flush().unwrap();
+    let mut batch_input = String::new();
+    stdin.lock().read_line(&mut batch_input).unwrap();
+    let batch_size: usize = batch_input.trim().parse().unwrap_or(BATCH_SIZE);
+
     let password_template = load_passwords(pw_path);
 
-    let urls: Vec<String> = match fs::read_to_string(&list_path) {
-        Ok(content) => {
-            let mut seen = std::collections::HashSet::new();
-            content
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter(|l| seen.insert(l.to_string()))
-                .map(|l| l.to_string())
-                .collect()
-        }
+    // Count total lines for progress tracking (fast scan, no data stored)
+    eprint!("{}", "[*] Counting lines... ".cyan());
+    let total_lines = count_lines(&list_path);
+    eprintln!(
+        "{}",
+        format!("{} domains found", total_lines).green()
+    );
+
+    // Open file for streaming — NOT loading into memory
+    let file = match std::fs::File::open(&list_path) {
+        Ok(f) => f,
         Err(e) => {
             eprintln!("{}", format!("Failed to read list file: {}", e).red());
             return;
         }
     };
 
-    println!(
-        "\n{} Loaded {} URLs with {} threads\n",
-        "[*]".green(),
-        urls.len(),
-        thread_count
+    // Use a large buffer for efficient I/O (8MB)
+    let reader = BufReader::with_capacity(8 * 1024 * 1024, file);
+
+    eprintln!(
+        "{}",
+        format!(
+            "[*] Streaming mode: batch_size={}, threads={}, memory-safe for any file size",
+            batch_size, thread_count
+        )
+        .green()
     );
 
-    let semaphore = Arc::new(Semaphore::new(thread_count));
-    let mut handles = vec![];
+    let processed = AtomicU64::new(0);
+    let mut batch: Vec<String> = Vec::with_capacity(batch_size);
+    let mut batch_num: u64 = 0;
 
-    for raw_url in urls {
-        let sem = semaphore.clone();
-        let ua_pool = user_agents.clone();
-        let pw_template = password_template.clone();
-        let thread_count = thread_count;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
 
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+        let trimmed = line.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
 
-            match parse_url(&raw_url).await {
-                Some(url) => {
-                    let mut brute = Brute::new(url, thread_count, ua_pool, pw_template);
-                    brute.start().await;
-                }
-                None => {
-                    println!(
-                        "[{}] {} => {}",
-                        "#".red(),
-                        raw_url,
-                        "Die Website".red()
-                    );
-                }
-            }
-        }));
+        batch.push(trimmed);
+        processed.fetch_add(1, Ordering::Relaxed);
+
+        if batch.len() >= batch_size {
+            batch_num += 1;
+            eprintln!(
+                "{}",
+                format!(
+                    "[*] Processing batch #{} ({} URLs)...",
+                    batch_num,
+                    batch.len()
+                )
+                .cyan()
+            );
+
+            process_batch(
+                std::mem::take(&mut batch),
+                thread_count,
+                &user_agents,
+                &password_template,
+                &processed,
+                total_lines,
+            )
+            .await;
+
+            // Re-allocate with capacity for next batch
+            batch = Vec::with_capacity(batch_size);
+        }
     }
 
-    for handle in handles {
-        let _ = handle.await;
+    // Process remaining URLs in the last (partial) batch
+    if !batch.is_empty() {
+        batch_num += 1;
+        eprintln!(
+            "{}",
+            format!(
+                "[*] Processing final batch #{} ({} URLs)...",
+                batch_num,
+                batch.len()
+            )
+            .cyan()
+        );
+
+        process_batch(
+            batch,
+            thread_count,
+            &user_agents,
+            &password_template,
+            &processed,
+            total_lines,
+        )
+        .await;
     }
+
+    eprintln!(
+        "{}",
+        format!(
+            "[✓] Done! Processed {} domains in {} batches.",
+            processed.load(Ordering::Relaxed),
+            batch_num
+        )
+        .green()
+    );
 }
