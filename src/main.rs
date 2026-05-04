@@ -9,6 +9,7 @@ mod auto;
 mod brute;
 mod common;
 mod grabdomain;
+mod livepyre;
 mod magento;
 mod react;
 
@@ -41,6 +42,7 @@ async fn main() {
     println!("  [{}] Grab Domain (cubdomain/all-url)", "3".yellow());
     println!("  [{}] React/Next.js RSC Exploit", "4".yellow());
     println!("  [{}] Magento CVE-2025-54236 SessionReaper", "5".yellow());
+    println!("  [{}] Livepyre (Livewire RCE)", "6".yellow());
     println!();
 
     print!("Select mode -> ");
@@ -54,8 +56,9 @@ async fn main() {
         "3" => grabdomain::run().await,
         "4" => react::run().await,
         "5" => magento::run(user_agents).await,
+        "6" => livepyre::run(user_agents).await,
         _ => {
-            eprintln!("{}", "Invalid selection. Use 1, 2, 3, 4, or 5.".red());
+            eprintln!("{}", "Invalid selection. Use 1-6.".red());
         }
     }
 }
