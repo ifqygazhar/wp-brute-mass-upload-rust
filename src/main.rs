@@ -9,6 +9,8 @@ mod auto;
 mod brute;
 mod common;
 mod grabdomain;
+mod magento;
+mod react;
 
 use colored::*;
 use std::io::{self, BufRead, Write};
@@ -17,12 +19,12 @@ use std::sync::Arc;
 use common::load_user_agents;
 
 const BANNER: &str = r#"
-  __     __     ______   ______     ______  
-/\ \  _ \ \   /\  == \ /\  == \   /\  ___\ 
-\ \ \/ ".\ \  \ \  _-/ \ \  __<   \ \  __\ 
- \ \__/".~\_\  \ \_\    \ \_____\  \ \_\   
-  \/_/   \/_/   \/_/     \/_____/   \/_/   
-                                           
+ █████╗ ██╗   ██╗████████╗ ██████╗     ██╗  ██╗ █████╗  ██████╗██╗  ██╗
+██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗    ██║  ██║██╔══██╗██╔════╝██║ ██╔╝
+███████║██║   ██║   ██║   ██║   ██║    ███████║███████║██║     █████╔╝ 
+██╔══██║██║   ██║   ██║   ██║   ██║    ██╔══██║██╔══██║██║     ██╔═██╗ 
+██║  ██║╚██████╔╝   ██║   ╚██████╔╝    ██║  ██║██║  ██║╚██████╗██║  ██╗
+╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝     ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝                                                                                                            
 "#;
 
 #[tokio::main]
@@ -37,6 +39,8 @@ async fn main() {
     println!("  [{}] Brute Force (XML-RPC & WP-Login)", "1".yellow());
     println!("  [{}] Auto Upload (Themes/Plugins/Shell)", "2".yellow());
     println!("  [{}] Grab Domain (cubdomain/all-url)", "3".yellow());
+    println!("  [{}] React/Next.js RSC Exploit", "4".yellow());
+    println!("  [{}] Magento CVE-2025-54236 SessionReaper", "5".yellow());
     println!();
 
     print!("Select mode -> ");
@@ -48,8 +52,10 @@ async fn main() {
         "1" => brute::run(user_agents).await,
         "2" => auto::run(user_agents).await,
         "3" => grabdomain::run().await,
+        "4" => react::run().await,
+        "5" => magento::run(user_agents).await,
         _ => {
-            eprintln!("{}", "Invalid selection. Use 1, 2, or 3.".red());
+            eprintln!("{}", "Invalid selection. Use 1, 2, 3, 4, or 5.".red());
         }
     }
 }

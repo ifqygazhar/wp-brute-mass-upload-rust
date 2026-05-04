@@ -1,0 +1,7 @@
+filter : 
+shodan parse --fields ip_str magento_results.json.gz | sort -u > targets.txt
+
+download
+wget -O hasil_shodan.json.gz "https://api.shodan.io/shodan/data/NjlmN2ZmZDQ3ODgyYjNjNWNjNjJlZjQ5?key=API_KEY_KAMU"
+shodan data list
+shodan data download [NAMA_FILE_DARI_LIST]

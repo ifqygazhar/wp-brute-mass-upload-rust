@@ -1,9 +1,3 @@
-/*
- * WP-AUTO: Auto Upload Themes / Plugins / Shell
- * Rewritten from auto.py to Rust
- * Original Python version by t.me/@GrazzMean | https://github.com/fooster1337
- */
-
 use colored::*;
 use rand::Rng;
 use regex::Regex;

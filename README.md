@@ -20,6 +20,11 @@ Mode 2 — Auto Upload:
   4. Auto Install WP-File-Manager Plugin
   5. Auto Upload Shell via WP File Manager
   6. Auto Verify Shell Access
+
+Mode 4 — React/Next TXT Target Normalizer:
+  1. Read Shodan IP/URL TXT files line by line
+  2. Normalize IPs into base URLs such as http://1.2.3.4:3000
+  3. Deduplicate output safely without running exploit payloads
 ```
 
 ## Installation
@@ -50,6 +55,8 @@ Run the binary and select mode:
 ```
   [1] Brute Force (XML-RPC & WP-Login)
   [2] Auto Upload (Themes/Plugins/Shell)
+  [3] Grab Domain (cubdomain/all-url)
+  [4] React/Next TXT Target Normalizer
 
 Select mode ->
 ```
@@ -65,6 +72,13 @@ Select mode ->
 - **List**: File containing `https://site.com/wp-login.php#user@password` (one per line)
 - **Thread**: Number of concurrent tasks
 - Requires `config.ini` with paths to `themes.zip`, `plugin.zip`, and shell file
+
+### React/Next TXT Target Normalizer
+
+- **List TXT**: File containing Shodan IPs or URLs, one per line
+- **Default scheme**: `http` or `https`
+- **Default port**: default `3000`; use `none` for no port
+- **Output**: default `react-targets-clean.txt`
 
 ## Project Structure
 
