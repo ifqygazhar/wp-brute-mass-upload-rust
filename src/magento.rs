@@ -567,7 +567,7 @@ async fn process_target(
             "RCE CONFIRMED".green().bold()
         );
         save_content(
-            "magento_rce.txt",
+            "good_magento.txt",
             &format!("{} | RCE_CONFIRMED", base_url),
         )
         .await;
@@ -792,6 +792,6 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
 
     eprintln!(
         "\n{}",
-        "[*] Done. Results saved to magento_rce.txt / magento_targets.txt".green()
+        "[*] Done. Results saved to good_magento.txt / magento_targets.txt".green()
     );
 }

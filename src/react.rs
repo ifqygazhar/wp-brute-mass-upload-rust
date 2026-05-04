@@ -105,12 +105,12 @@ async fn process_url(
                     "POSSIBLE HIT".green().bold()
                 );
                 // Save successful hit
-                save_content("react_results.txt", &format!("{} | status={} | body_len={}", url, status, body.len())).await;
+                save_content("good_react.txt", &format!("{} | status={} | body_len={}", url, status, body.len())).await;
 
                 // If the body has interesting content, save full response
                 if body.len() > 10 {
                     save_content(
-                        "react_results_full.txt",
+                        "good_react_full.txt",
                         &format!("=== {} ===\nStatus: {}\n{}\n", url, status, body),
                     )
                     .await;
@@ -333,7 +333,7 @@ pub async fn run() {
     eprintln!(
         "\n{}",
         format!(
-            "[*] Done. Results saved to react_results.txt / react_results_full.txt"
+            "[*] Done. Results saved to good_react.txt / good_react_full.txt"
         )
         .green()
     );

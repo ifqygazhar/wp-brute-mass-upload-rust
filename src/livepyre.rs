@@ -743,7 +743,7 @@ async fn process_target(
             ver_str
         );
         save_content(
-            "livepyre_rce.txt",
+            "good_livepyre.txt",
             &format!("{} | {} | RCE", base_url, ver_str),
         )
         .await;
@@ -1001,7 +1001,7 @@ pub async fn run(user_agents: Arc<Vec<String>>) {
 
     eprintln!(
         "\n{}",
-        "[*] Done. Results saved to livepyre_rce.txt / livepyre_targets.txt / livepyre_livewire.txt"
+        "[*] Done. Results saved to good_livepyre.txt / livepyre_targets.txt / livepyre_livewire.txt"
             .green()
     );
 }
